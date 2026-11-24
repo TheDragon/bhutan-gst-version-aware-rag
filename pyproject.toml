@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bhutan-gst-version-rag"
+version = "0.1.0"
+description = "Mid-review prototype for version-aware retrieval over Bhutan GST legislation"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "faiss-cpu>=1.8",
+  "huggingface-hub>=0.24,<1.0",
+  "jupyterlab>=4.0",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "pypdf>=5.0",
+  "rank-bm25>=0.2.2",
+  "requests>=2.31",
+  "scikit-learn>=1.4",
+  "sentence-transformers>=3.4,<4.0",
+  "sentencepiece>=0.2",
+  "transformers>=4.48,<5.0",
+  "torch>=2.2,<3.0",
+  "tqdm>=4.66",
+  "uvicorn[standard]>=0.34",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

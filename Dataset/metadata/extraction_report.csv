@@ -1,0 +1,11 @@
+document_id,status,pages,english_pages,characters,errors
+gst_act_2020,extracted,360,187,207983,
+gst_amendment_2021,extracted,15,8,7998,
+gst_amendment_2022,extracted,11,3,2017,
+gst_amendment_2025,extracted,63,31,38467,
+gst_consolidated_2025,extracted,170,164,170356,
+gst_rules_2026,extracted,114,112,113429,
+gst_rule_change_notice_2026,extracted,1,1,1475,
+gst_implementation_notice_2025,extracted_with_manual_transcription,1,1,1051,
+gst_implementation_notice_2026,extracted,6,6,5809,
+gst_amendment_2026,extracted,14,7,4484,

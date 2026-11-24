@@ -1,0 +1,22 @@
+project_name: Version-Aware RAG for Bhutan GST
+corpus_cutoff: 2026-09-30
+language: en
+base_embedding_model: sentence-transformers/all-MiniLM-L6-v2
+random_seed: 42
+minimum_training_examples: 200
+benchmark_questions: 120
+development_questions: 20
+test_questions: 100
+generator_candidates:
+  - google/flan-t5-small
+  - google/flan-t5-base
+selected_generator: google/flan-t5-base
+retrieval:
+  top_k: 5
+  rrf_k: 60
+training:
+  epochs: 1
+  batch_size: 8
+  margin: 0.35
+evaluation_status: provisional_until_group_manual_verification
+
