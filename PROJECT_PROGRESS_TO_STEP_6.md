@@ -1,5 +1,7 @@
 # Project Progress Through Controlled Evaluation
 
+> Historical checkpoint. See the [current project README](README.md) for the application and the latest saved evaluation.
+
 ## Scope of this build
 
 This build follows the project proposal through the controlled comparison stage. It intentionally excludes a web frontend and API backend.

@@ -1,107 +1,64 @@
 # Version-Aware RAG for Bhutan GST
 
-Research implementation of a version-aware retrieval pipeline for official Bhutan GST legislation. The repository now includes the earlier mid-review checkpoint plus a provisional three-system controlled comparison. The frontend and API are intentionally deferred.
+GST Lens is a working research MVP for finding and comparing official Bhutan GST provisions as of a selected date. Its React frontend and FastAPI backend provide dated question answering, a citation and evidence inspector, side-by-side retrieval comparisons, section version timelines, and a searchable document library.
 
-## Mid-review scope
+The corpus contains 10 official PDFs, including the 2026 GST Amendment Act, and 1,581 section-aware chunks. The corpus includes a transcription of one scanned implementation notice and has a 30 September 2026 cut-off. [Corpus manifest](Dataset/metadata/corpus_manifest.csv)
 
-1. Freeze and audit an official-source corpus.
-2. Extract English text from the PDFs.
-3. Create page/section-aware chunks with provenance metadata.
-4. Extract candidate amendment relationships for human review.
-5. Create at least 200 weakly supervised question-passage training triples.
-6. Compare pretrained and fine-tuned MiniLM retrieval.
-7. Build BM25, FAISS, and a small version-filtered retrieval demonstration.
+## Run GST Lens locally
 
-This is an academic information-retrieval prototype, not legal advice. Automatically extracted effective dates and amendment relationships must be manually checked against the official documents before being presented as verified legal facts.
-
-## Setup
+Use Windows PowerShell from the repository root. The Python project supports **3.11 and 3.12**. The frontend lockfile requires **Node.js 20.19+ within Node 20, or Node.js 22.12+**.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e .
-python -m jupyter lab
+.\.venv\Scripts\python.exe -m pip install -e .
+npm --prefix app/frontend ci
 ```
 
-The project pins Sentence Transformers below version 4 because newer multimodal releases may require TorchCodec/FFmpeg even though this project only trains a text embedding model.
-
-If an old global `jupyter_contrib_nbextensions` installation breaks `nbconvert`, notebooks can still be tested without optional plugins:
+On a fresh clone, rebuild the corpus, train MiniLM on the 300 generated triplets, and build the FAISS index. The first run needs internet access for the source PDFs and pretrained model weights.
 
 ```powershell
-python scripts/execute_notebook.py notebooks/02_versioned_sections.ipynb --output results/notebook_runs/02_versioned_sections.ipynb
+.\.venv\Scripts\python.exe scripts/run_to_mid_review.py --skip-training
+.\.venv\Scripts\python.exe scripts/train_minilm.py --epochs 1 --max-examples 300
+.\.venv\Scripts\python.exe scripts/build_indexes.py
 ```
 
-The notebooks in `notebooks/` can be run in order. The same reproducible pipeline is also available from the command line:
+Then start the app and open [GST Lens on localhost](http://127.0.0.1:5173).
 
 ```powershell
-python scripts/run_to_mid_review.py --skip-training
-python scripts/train_minilm.py --epochs 1
-python scripts/build_indexes.py
-python scripts/validate_checkpoint.py --checkpoint all
+.\scripts\run_research_app.ps1 -FastDemo
 ```
 
-Use `--skip-training` for a fast corpus checkpoint. MiniLM fine-tuning is CPU-compatible but may take several minutes.
+`-FastDemo` uses extractive answers. For FLAN-T5-base answer generation, launch without that flag from a fresh PowerShell session. The backend listens on port 8000. Press Ctrl+C to stop the launcher.
 
-## Corpus cut-off
+The GitHub clone includes the source code, notebooks, corpus manifest, and benchmark file. Raw corpus PDFs, extracted passages, generated triplets, model weights, FAISS files, and evaluation outputs are stored locally and excluded by Git.
 
-The initial corpus cut-off is **2026-09-30**. The DRC June 2026 implementation notice refers to a GST Amendment Act of Bhutan 2026, but an official downloadable copy was not located during initial collection. This is tracked in `Dataset/metadata/corpus_manifest.csv` as a blocking provenance gap for claims about the post-June-2026 legal position.
+## Retrieval and evaluation
 
-## Outputs
+The three retrieval modes share BM25 keyword search, MiniLM embeddings searched with FAISS, and reciprocal rank fusion. Standard RAG searches the corpus, date-filtered RAG filters by effective dates, and version-aware RAG also uses amendment relationships and version metadata.
 
-- `Dataset/metadata/corpus_manifest.csv`: source and version register
-- `Dataset/metadata/extraction_report.csv`: extraction audit
-- `Dataset/metadata/amendment_events.csv`: candidate relationships requiring review
-- `Dataset/processed_sections/sections.jsonl`: retrievable evidence chunks
-- `Dataset/training_examples/minilm_training.jsonl`: retriever training triples
-- `results/checkpoint_report.json`: validation summary
-- `results/minilm_metrics.json`: baseline/fine-tuned retrieval metrics
+On the 60-example embedding validation split, one epoch of MiniLM fine-tuning improved Recall@5 from **56.7% to 90.0%** and MRR@10 from **0.465 to 0.838**. This is a separate experiment from the controlled RAG comparison.
 
-## Current mid-review checkpoint
+The latest saved controlled comparison uses the revised 120-question benchmark (20 development and 100 test questions) and the extractive generator. Each system retrieved ten passages per question for MRR@10. Version selection was measured on the 92 version-sensitive test questions.
 
-- 9 official PDFs downloaded and hash-audited
-- 8 PDFs with usable English text; 1 image-only notice flagged for OCR
-- 1,569 retrievable chunks
-- 61 candidate amendment events requiring human verification
-- 300 generated training triples requiring sample-by-sample review before final research use
-- MiniLM development Recall@5: 0.521 before fine-tuning, 0.813 after one epoch
-- MiniLM development MRR@10: 0.420 before fine-tuning, 0.646 after one epoch
-- FAISS index built for all chunks and hybrid BM25+dense retrieval smoke-tested
+| System | Recall@5 | MRR@10 | Version-selection accuracy | Automated citation match |
+| --- | ---: | ---: | ---: | ---: |
+| Standard RAG | 56% | 0.421 | 26.1% | 30% |
+| Date-filtered RAG | 57% | 0.467 | 34.8% | 38% |
+| Version-aware RAG | 97% | 0.946 | 94.6% | 90% |
 
-These development figures are not the proposal's final benchmark results. The 120-question benchmark is deliberately reserved for the later evaluation phase.
+Version-aware RAG met the proposal's **85%** target on this benchmark, selecting the expected passage first for **87 of 92** version-sensitive questions. A diagnostic on the same test questions before the named-Act commencement lookup scored **70 of 92 (76.1%)**. The 17 effective-date test questions share one source clause and name the Act in the question, so this result measures performance on the project benchmark. It does not establish performance on unseen Acts or provision-specific commencement conditions.
 
-## Progress after the mid-review
+Citation match measures agreement with the benchmark evidence labels. Use the evidence inspector to see the cited passage and assess whether it supports the answer.
 
-- Official GST Amendment Act 2026 added; all 10 manifest records are now available.
-- Scanned implementation notice transcribed with an explicit group-review flag.
-- 1,581 version-enriched chunks and 62 source-linked amendment events.
-- Standard, date-filtered, and version-aware retrieval systems implemented.
-- Proposal-shaped 120-question benchmark created with 20 development and 100 test questions; all items remain marked for group review.
-- FLAN-T5-small and FLAN-T5-base compared; FLAN-T5-base selected on the development split.
-- Provisional test Version Selection Accuracy: standard 0.293, date-filtered 0.370, version-aware 0.696.
-
-See `PROJECT_PROGRESS_TO_STEP_6.md` and `notebooks/05_full_project_to_controlled_evaluation.ipynb` for the complete workflow and limitations.
-
-## GST Lens web application
-
-The research pipeline now has a FastAPI backend and a responsive React
-frontend under `app/`. It provides five connected workspaces:
-
-- project overview and pipeline statistics;
-- dated question answering with an evidence inspector;
-- side-by-side comparison of all three retrieval systems;
-- section version timelines;
-- an indexed official-document library.
-
-Install and run:
+To reproduce this comparison using the existing benchmark, run the command below. It saves predictions and metrics under `results/commencement_evaluation/`.
 
 ```powershell
-cd app\frontend
-npm install
-cd ..\..
-.\scripts\run_research_app.ps1
+.\.venv\Scripts\python.exe scripts/run_final_experiment.py --fixed-benchmark --top-k 10 --output-dir results/commencement_evaluation --generator extractive-evidence-v1
 ```
 
-Use `-FastDemo` to substitute deterministic extractive generation while
-demonstrating the interface. Without it, the backend uses the selected
-`google/flan-t5-base` generator.
+## Project materials and historical checkpoints
+
+- [Mid-review checkpoint](MID_REVIEW_STATUS.md) and [technical report](docs/MID_REVIEW_TECHNICAL_REPORT.md) document the original corpus and retriever.
+- [Progress through controlled evaluation](PROJECT_PROGRESS_TO_STEP_6.md) and the [full workflow notebook](notebooks/05_full_project_to_controlled_evaluation.ipynb) describe the earlier experiment.
+- [Post-mid-review technical brief](output/pdf/Bhutan_GST_RAG_Post_Mid_Review_Documentation.pdf) documents the earlier results and application handoff.
+- [Application architecture](app/ARCHITECTURE.md) describes the frontend and API.

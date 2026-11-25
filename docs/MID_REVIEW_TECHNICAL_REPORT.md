@@ -1,5 +1,7 @@
 # Version-Aware RAG for Bhutan GST — Mid-Review Technical Report
 
+> Historical checkpoint. See the [current project README](../README.md) for GST Lens and the latest saved evaluation.
+
 **Course:** CSA402 Natural Language Processing  
 **Team:** Garab Phuntsho Wangyel, Tshering Wangchuk, and Sonam Chophel Dorji  
 **Project stage:** Mid-review checkpoint  

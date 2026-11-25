@@ -16,7 +16,9 @@ from sentence_transformers import SentenceTransformer
 
 from .paths import INDEXES
 from .quality import (
+    act_commencement_clause,
     bm25_tokenize,
+    commencement_intent,
     expand_retrieval_query,
     rate_passage_adjustment,
     substantive_adjustment,
@@ -58,6 +60,10 @@ class RetrievalEngine:
 
         self.ids = [item["chunk_id"] for item in self.chunks]
         self.by_id = {item["chunk_id"]: item for item in self.chunks}
+        self.commencement_sources: dict[str, dict] = {}
+        for item in sorted(self.chunks, key=lambda record: int(record.get("page_number", 0))):
+            if act_commencement_clause(item):
+                self.commencement_sources.setdefault(item["document_id"], item)
         self.bm25 = BM25Okapi([bm25_tokenize(item["text"]) for item in self.chunks])
         self.model = SentenceTransformer(self.model_name)
         self.index = faiss.read_index(str(self.index_path))
@@ -104,7 +110,8 @@ class RetrievalEngine:
         top_k: int = 5,
         candidate_k: int = 75,
     ) -> list[dict]:
-        target_date = target_date or parse_query_date(query)
+        asks_commencement = commencement_intent(query)
+        target_date = target_date or (None if asks_commencement else parse_query_date(query))
         allowed = self._allowed_ids(system, target_date, query)
         retrieval_query = expand_retrieval_query(query)
 
@@ -127,11 +134,25 @@ class RetrievalEngine:
 
         fused = reciprocal_rank_fusion([lexical_ids, dense_ids])
         fused_scores = dict(fused)
+        named_commencement_id = None
         for chunk_id in list(fused_scores):
             item = self.by_id[chunk_id]
             fused_scores[chunk_id] += substantive_adjustment(item)
             fused_scores[chunk_id] += rate_passage_adjustment(query, item)
         if system == "version_aware":
+            if asks_commencement:
+                query_terms = " " + " ".join(bm25_tokenize(query)) + " "
+                matches = []
+                for item in self.commencement_sources.values():
+                    title = " ".join(bm25_tokenize(item["title"]))
+                    short_title = title.replace("goods and services tax", "gst").replace(" of bhutan ", " ")
+                    if any(f" {name} " in query_terms for name in (title, short_title)):
+                        matches.append(item)
+                if len(matches) == 1:
+                    # The explicitly named instrument is itself the object of the
+                    # question. Its commencement clause is useful even before it is in force.
+                    named_commencement_id = matches[0]["chunk_id"]
+                    fused_scores[named_commencement_id] = 1.0
             section_match = re.search(r"\bsection\s+(\d{1,4}[a-z]?(?:\s*\([^)]+\))?)", query, re.I)
             requested_section = re.sub(r"\s+", "", section_match.group(1)).lower() if section_match else ""
             requested_relation = next(
@@ -147,24 +168,21 @@ class RetrievalEngine:
                 ),
                 "",
             )
-            commencement_intent = bool(
-                re.search(r"\b(commencement|effective date|take effect|comes into force)\b", query, re.I)
-            )
             for chunk_id in list(fused_scores):
                 item = self.by_id[chunk_id]
                 affected = [str(value).lower() for value in item.get("affected_sections", [])]
                 relations = [str(value).lower() for value in item.get("relation_types", [])]
                 item_section = re.sub(r"\s+", "", str(item.get("section_number", ""))).lower()
                 title = re.sub(r"\s+", " ", str(item.get("title", ""))).strip().lower()
-                if requested_section and requested_section in affected and not commencement_intent:
+                if requested_section and requested_section in affected and not asks_commencement:
                     fused_scores[chunk_id] += 0.22
-                if requested_section and requested_section == item_section and not commencement_intent:
+                if requested_section and requested_section == item_section and not asks_commencement:
                     fused_scores[chunk_id] += 0.14
-                if requested_relation and requested_relation in relations and not commencement_intent:
+                if requested_relation and requested_relation in relations and not asks_commencement:
                     fused_scores[chunk_id] += 0.05
                 if title and title in re.sub(r"\s+", " ", query).lower():
                     fused_scores[chunk_id] += 0.18
-                if commencement_intent and re.search(
+                if asks_commencement and re.search(
                     r"\b(comes into force|commencement)\b", str(item.get("text", "")), re.I
                 ):
                     fused_scores[chunk_id] += 0.40
@@ -181,6 +199,8 @@ class RetrievalEngine:
         results: list[dict] = []
         for chunk_id, rrf_score in fused[:top_k]:
             item = dict(self.by_id[chunk_id])
+            if chunk_id == named_commencement_id:
+                item["named_act_commencement"] = True
             item.update(
                 {
                     "system": system,

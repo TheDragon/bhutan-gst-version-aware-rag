@@ -1,7 +1,9 @@
 from gst_rag.corpus import _page_chunks
 from gst_rag.generation import EvidenceGenerator
 from gst_rag.quality import (
+    act_commencement_clause,
     best_answer_evidence,
+    commencement_intent,
     evidence_supports_question,
     expand_retrieval_query,
     gst_rate_intent,
@@ -128,4 +130,28 @@ def test_grounded_vehicle_rate_calculation():
     assert "5%" in result["answer"]
     assert "Nu. 50,000" in result["answer"]
     assert "Nu. 1,050,000" in result["answer"]
+
+
+def test_named_act_commencement_answer_uses_the_cited_clause():
+    question = "What commencement date applies to section 40 under the GST Amendment Act 2025?"
+    evidence = {
+        "chunk_id": "commencement",
+        "document_id": "gst_amendment_2025",
+        "document_type": "amendment",
+        "title": "GST Amendment Act 2025",
+        "source_url": "https://example.test/amendment.pdf",
+        "section_number": "2",
+        "page_number": 18,
+        "text": "2. This Act comes into force on 1 January 2026. Savings",
+        "named_act_commencement": True,
+    }
+
+    assert commencement_intent(question)
+    assert not gst_rate_intent(question)
+    assert act_commencement_clause({**evidence, "text": "2. Commencement..............1"}) == ""
+    result = EvidenceGenerator().answer(question, [evidence], "2025-12-31")
+    assert result["answer_strategy"] == "act_commencement_clause"
+    assert "1 January 2026" in result["answer"]
+    assert "2025-12-31" not in result["answer"]
+    assert result["citations"][0]["chunk_id"] == "commencement"
 

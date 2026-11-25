@@ -7,7 +7,31 @@ def bm25_tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+def commencement_intent(query: str) -> bool:
+    if re.search(r"\b(commencement|effective date)\b", query, re.I):
+        return True
+    return bool(
+        re.search(r"\b(when|what date|on which date)\b", query, re.I)
+        and re.search(r"\b(force|effect|effective|commenc\w*|start\w*|appl\w*)\b", query, re.I)
+    )
+
+
+def act_commencement_clause(item: dict) -> str:
+    """Extract an Act-level commencement clause from operative text."""
+    raw = str(item.get("text", ""))
+    if item.get("document_type") not in {"act", "amendment", "consolidation"} or toc_like(raw):
+        return ""
+    match = re.search(
+        r"\bThis Act\s+(?:(?:shall\s+)?come[s]? into force|commences|takes effect)\b[^.]*\.",
+        " ".join(raw.split()),
+        re.I,
+    )
+    return match.group() if match else ""
+
+
 def gst_rate_intent(query: str) -> bool:
+    if commencement_intent(query):
+        return False
     lowered = query.lower()
     has_gst = "gst" in lowered or "goods and services tax" in lowered
     asks_rate = bool(re.search(r"\b(rate|percent|percentage|how much|payable|appl(?:y|ies|ied)|charg(?:e|ed))\b", lowered))

@@ -8,8 +8,10 @@ os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 
 from .quality import (
+    act_commencement_clause,
     best_answer_evidence,
     bm25_tokenize,
+    commencement_intent,
     evidence_supports_question,
     gst_rate_intent,
     weak_generated_answer,
@@ -150,6 +152,20 @@ class EvidenceGenerator:
             }
 
         top = best_answer_evidence(evidence)
+        if commencement_intent(question) and top.get("named_act_commencement"):
+            clause = act_commencement_clause(top)
+            if clause:
+                answer = f"The Act's commencement clause states: {clause}"
+                if re.search(r"\b(section|provision|schedule)\b", question, re.I):
+                    answer += " A particular provision may have a separate commencement or enforcement condition."
+                return {
+                    "answer": answer,
+                    "abstained": False,
+                    "reason": "",
+                    "generator": self.model_name,
+                    "answer_strategy": "act_commencement_clause",
+                    "citations": [_citation(top)],
+                }
         grounded_rate = _grounded_rate_answer(question, evidence, target_date)
         if grounded_rate is not None:
             return {**grounded_rate, "generator": self.model_name}

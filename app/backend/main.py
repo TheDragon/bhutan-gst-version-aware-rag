@@ -152,7 +152,9 @@ def health() -> dict:
 def stats() -> dict:
     manifest = pd.read_csv(MANIFEST).fillna("")
     events = pd.read_csv(METADATA / "amendment_events.csv").fillna("")
-    metrics_path = RESULTS / "controlled_comparison_metrics.json"
+    metrics_path = RESULTS / "commencement_evaluation" / "controlled_comparison_metrics.json"
+    if not metrics_path.exists():
+        metrics_path = RESULTS / "controlled_comparison_metrics.json"
     metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else {}
     return {
         "documents": int(len(manifest)),

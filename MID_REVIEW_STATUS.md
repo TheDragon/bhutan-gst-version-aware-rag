@@ -1,5 +1,7 @@
 # Mid-Review Status
 
+> Historical checkpoint. See the [current project README](README.md) for GST Lens, setup, and the latest saved evaluation.
+
 ## Completed
 
 - Reproducible project structure and Jupyter workflow
