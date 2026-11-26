@@ -394,13 +394,7 @@ function AmendmentBlock({ compare, summary }) {
       </ol>
       {summary && <p className="amendment-summary">{summary}</p>}
       {compare.diff?.length > 0 ? (
-        <p className="diff-text">
-          {compare.diff.map((op, index) => {
-            if (op.op === 'del') return <del key={index}>{op.text}</del>
-            if (op.op === 'add') return <ins key={index}>{op.text}</ins>
-            return <span key={index}>{op.text}</span>
-          }).reduce((parts, part, index) => (index ? [...parts, ' ', part] : [part]), [])}
-        </p>
+        <DiffText ops={compare.diff} />
       ) : (
         <div className="side-by-side">
           <div><span>Before</span><p>{before.text}</p></div>
@@ -491,53 +485,183 @@ function comparisonSummary(comparisons) {
 }
 
 function TimelineExplorer() {
-  const [section, setSection] = useState('40')
-  const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(false)
+  const [groups, setGroups] = useState([])
+  const [selected, setSelected] = useState({ instrument: 'gst_act_2020', section: '40' })
+  const [story, setStory] = useState(null)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const run = async (event) => {
-    event?.preventDefault()
+  useEffect(() => {
+    api.amendments().then(setGroups).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     setLoading(true)
     setError('')
-    try {
-      setResult(await api.timeline(section))
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { run() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    api.provision(selected.instrument, selected.section)
+      .then(setStory)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false))
+  }, [selected])
 
   return (
-    <PageFrame eyebrow="Version explorer" title="Trace a section through time" description="Review base provisions and amendment evidence connected to a GST section.">
-      <div className="timeline-layout">
-        <aside className="timeline-controls">
-          <form onSubmit={run}>
-            <label htmlFor="section-number">GST section</label>
-            <div className="search-input"><Search size={17} /><input id="section-number" value={section} onChange={(e) => setSection(e.target.value)} placeholder="e.g. 40" /><button aria-label="Search section"><ArrowRight size={17} /></button></div>
-          </form>
-          <div className="popular-sections"><span>Quick sections</span><div>{['3', '5', '11', '40', '70'].map((item) => <button className={section === item ? 'active' : ''} key={item} onClick={() => setSection(item)}>{item}</button>)}</div></div>
-          <div className="help-note"><History size={16} /><p>Entries include both the section text and amendment passages that explicitly affect it.</p></div>
+    <PageFrame eyebrow="Version explorer" title="See how a GST rule changed" description="Pick a change from the list to see the text in force today, when it was amended and the exact amending clause.">
+      <div className="explorer-layout">
+        <aside className="explorer-index">
+          <div className="change-groups">
+            {groups.map((group) => {
+              return (
+                <section key={group.document_id} className="change-group">
+                  <header>
+                    <strong>{group.short_name}</strong>
+                    <small>in force {formatDate(group.effective_from)} · {group.items.length} {group.items.length === 1 ? 'change' : 'changes'}</small>
+                  </header>
+                  {group.items.map((item) => {
+                    const active = selected.instrument === item.instrument && normalizeSection(selected.section) === normalizeSection(item.section)
+                    return (
+                      <button
+                        key={`${item.instrument}-${item.section}`}
+                        className={cx('change-item', active && 'active')}
+                        onClick={() => setSelected({ instrument: item.instrument, section: item.section })}
+                      >
+                        <span className="change-item-top"><b>{item.label}</b><em className={cx('relation-tag', item.relation)}>{RELATION_LABELS[item.relation]}</em></span>
+                        {item.title !== item.label && <small>{item.title}</small>}
+                      </button>
+                    )
+                  })}
+                </section>
+              )
+            })}
+          </div>
         </aside>
-        <section className="timeline-panel">
+
+        <section className="explorer-story">
           {loading && <LoadingState compact />}
           {error && <ErrorState message={error} />}
-          {result && !loading && (
-            <>
-              <div className="timeline-summary"><div><span>Section</span><strong>{result.section}</strong></div><p>{result.count} linked passages found</p></div>
-              {result.entries.length === 0 ? <EmptyState icon={History} title="No linked versions found" text="Try another section number or inspect the Corpus Library." /> : (
-                <div className="timeline-list">
-                  {result.entries.map((entry, index) => <TimelineEntry entry={entry} index={index} key={entry.chunk_id} />)}
-                </div>
-              )}
-            </>
-          )}
+          {story && !loading && <ProvisionStory story={story} />}
         </section>
       </div>
     </PageFrame>
+  )
+}
+
+const RELATION_LABELS = { amended: 'Amended', inserted: 'Added', repealed: 'Repealed' }
+const STATUS_TEXT = { amended: 'Amended', unchanged: 'Unchanged', repealed: 'Repealed', not_found: 'Not found' }
+
+function normalizeSection(value) {
+  return String(value || '').toLowerCase().replace(/[\s.]+/g, '')
+}
+
+function ProvisionStory({ story }) {
+  const original = story.history.find((node) => node.kind === 'original')
+  return (
+    <article className="story">
+      <span className="eyebrow">{story.instrument_label}</span>
+      <h2>{story.label}{story.title && story.title !== story.label ? <span> — {story.title}</span> : null}</h2>
+      <p className="story-summary"><em className={cx('status-pill', story.status)}>{STATUS_TEXT[story.status]}</em> {story.summary}</p>
+      {story.original_missing && <p className="story-note">The original 2020 wording of this provision isn’t in the indexed text, so the history starts from the consolidated Act.</p>}
+
+      {story.current && (
+        <div className="story-current">
+          <span className="story-label">In force today</span>
+          {story.current.diff?.length ? <DiffText ops={story.current.diff} /> : <p className="story-text">{story.current.text}</p>}
+          <p className="source-line">{story.current.short_name} · page {story.current.page}{story.current.source_url && <> · <a href={story.current.source_url} target="_blank" rel="noreferrer">Open official PDF <ExternalLink size={12} /></a></>}</p>
+          {story.current.diff?.length > 0 && <p className="diff-legend"><del>removed</del> <ins>added</ins> by the latest amendment</p>}
+        </div>
+      )}
+      {story.status === 'repealed' && original && (
+        <div className="story-current repealed">
+          <span className="story-label">No longer in force · last wording</span>
+          <p className="story-text">{original.text}</p>
+        </div>
+      )}
+      {!story.current && story.status === 'amended' && (
+        <p className="story-note">The full new wording isn’t in the indexed text. The amending clause{story.history[0]?.notices?.length ? ' and the official notice' : ''} below show what changed.</p>
+      )}
+
+      {story.history.length > 0 && (
+        <div className="story-history">
+          <span className="story-label">History</span>
+          <ol>
+            {story.history.map((node, index) => <HistoryNode node={node} key={`${node.start}-${node.kind}-${index}`} />)}
+          </ol>
+        </div>
+      )}
+
+      {story.other_matches?.length > 0 && (
+        <details className="other-matches">
+          <summary>Other passages numbered {story.section} ({story.other_matches.length}) <ChevronDown size={14} /></summary>
+          <p>These share the number but are not this provision: schedule rows, other documents, or clauses about other sections.</p>
+          {story.other_matches.map((item) => (
+            <a key={item.chunk_id} href={item.source_url} target="_blank" rel="noreferrer">
+              <b>{item.short_name} · page {item.page}</b>
+              <span>{item.preview}…</span>
+            </a>
+          ))}
+        </details>
+      )}
+    </article>
+  )
+}
+
+function HistoryNode({ node }) {
+  const many = node.clauses.length >= 3
+  const kindLabel = { original: 'Original', amended: 'Amended', inserted: 'Added', repealed: 'Repealed' }[node.kind] || node.kind
+  return (
+    <li className={cx('history-node', node.kind)}>
+      <div className="history-head">
+        <b>{formatDate(node.start)}</b>
+        <em className={cx('relation-tag', node.kind)}>{kindLabel}</em>
+        <span>{node.kind === 'original' ? node.short_name : node.clauses[0] ? `by the ${node.clauses[0].short_name}${node.clauses[0].clause && !many ? `, clause ${node.clauses[0].clause}` : ''}` : node.short_name}</span>
+      </div>
+      {node.kind === 'original' && <p className="history-change">First enacted wording{node.end ? `, in force until ${formatDate(node.end)}` : ''}.</p>}
+      {node.change && <p className="history-change">{node.change}</p>}
+      {node.diff?.length > 0 && <DiffText ops={node.diff} />}
+
+      {node.clauses.length > 0 && (
+        <details className="clause-box">
+          <summary>{many ? `All ${node.clauses.length} amending clauses` : `Amending clause: ${node.clauses[0].short_name}${node.clauses[0].clause ? `, clause ${node.clauses[0].clause}` : ''}, page ${node.clauses[0].page}`} <ChevronDown size={13} /></summary>
+          {node.clauses.map((clause) => (
+            <div className="clause" key={clause.event_id}>
+              {many && <p className="clause-title"><em className={cx('relation-tag', clause.relation)}>{RELATION_LABELS[clause.relation]}</em> {clause.affected} · clause {clause.clause}</p>}
+              <p className="clause-text">{many ? clause.now_reads : clause.text}</p>
+              {clause.source_url && <a href={clause.source_url} target="_blank" rel="noreferrer">Open the amending Act, page {clause.page} <ExternalLink size={12} /></a>}
+            </div>
+          ))}
+        </details>
+      )}
+
+      {node.notices?.map((notice) => (
+        <div className="notice-box" key={`${notice.short_name}-${notice.page}`}>
+          <b>{notice.short_name}{notice.start ? `, effective ${formatDate(notice.start)}` : ''}</b>
+          <p>{notice.text}</p>
+          {notice.source_url && <a href={notice.source_url} target="_blank" rel="noreferrer">Open notice <ExternalLink size={12} /></a>}
+        </div>
+      ))}
+
+      {node.text && (
+        <details className="full-text">
+          <summary>Full text of this version <ChevronDown size={13} /></summary>
+          <p className="story-text">{node.text}</p>
+          {node.source_url && <a href={node.source_url} target="_blank" rel="noreferrer">{node.short_name}, page {node.page} <ExternalLink size={12} /></a>}
+        </details>
+      )}
+      {node.also_in?.length > 0 && (
+        <p className="also-in">Reprinted unchanged in the {node.also_in.map((item) => `${item.short_name} (page ${item.page})`).join(', ')}.</p>
+      )}
+    </li>
+  )
+}
+
+function DiffText({ ops }) {
+  return (
+    <p className="diff-text">
+      {ops.map((op, index) => {
+        if (op.op === 'del') return <del key={index}>{op.text}</del>
+        if (op.op === 'add') return <ins key={index}>{op.text}</ins>
+        return <span key={index}>{op.text}</span>
+      }).reduce((parts, part, index) => (index ? [...parts, ' ', part] : [part]), [])}
+    </p>
   )
 }
 
@@ -607,22 +731,6 @@ function CompactEvidence({ item, index }) {
         {item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">Open official source <ExternalLink size={14} /></a>}
       </div>
     </details>
-  )
-}
-
-function TimelineEntry({ entry, index }) {
-  const [open, setOpen] = useState(index < 2)
-  return (
-    <article className="timeline-entry">
-      <div className="timeline-node"><span>{index + 1}</span></div>
-      <div className="timeline-content">
-        <button onClick={() => setOpen(!open)}>
-          <div><span>{formatDate(entry.version_start || entry.effective_from) || 'Date not recorded'}</span><strong>{entry.title}</strong><small>Section {entry.section_number} · {entry.version_status?.replaceAll('_', ' ')}</small></div>
-          <ChevronDown size={18} />
-        </button>
-        {open && <div className="timeline-detail"><p>{entry.text}</p><a href={entry.source_url} target="_blank" rel="noreferrer">Official source <ExternalLink size={13} /></a></div>}
-      </div>
-    </article>
   )
 }
 

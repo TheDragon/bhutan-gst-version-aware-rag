@@ -17,6 +17,9 @@ export const api = {
   stats: () => request('/api/stats'),
   documents: () => request('/api/documents'),
   timeline: (section) => request(`/api/timeline/${encodeURIComponent(section)}`),
+  amendments: () => request('/api/amendments'),
+  provision: (instrument, section) =>
+    request(`/api/provision?instrument=${encodeURIComponent(instrument)}&section=${encodeURIComponent(section)}`),
   answer: (payload) => request('/api/answer', { method: 'POST', body: JSON.stringify(payload) }),
   search: (payload) => request('/api/search', { method: 'POST', body: JSON.stringify(payload) }),
   compare: (payload) => request('/api/compare', { method: 'POST', body: JSON.stringify(payload) }),

@@ -28,6 +28,7 @@ from gst_rag.utils import read_jsonl
 
 if TYPE_CHECKING:
     from gst_rag.generation import EvidenceGenerator
+    from gst_rag.provision_story import ProvisionStories
     from gst_rag.systems import RetrievalEngine
     from gst_rag.version_view import VersionIndex
 
@@ -97,6 +98,13 @@ def get_version_index() -> "VersionIndex":
     from gst_rag.version_view import VersionIndex
 
     return VersionIndex(get_chunks())
+
+
+@lru_cache(maxsize=1)
+def get_stories() -> "ProvisionStories":
+    from gst_rag.provision_story import ProvisionStories
+
+    return ProvisionStories(get_chunks(), METADATA / "amendment_events.csv", get_version_index())
 
 
 @lru_cache(maxsize=512)
@@ -249,6 +257,21 @@ def timeline(section: str) -> dict:
         "count": len(matches),
         "entries": [_evidence_item(item, rank) for rank, item in enumerate(matches, start=1)],
     }
+
+
+@app.get("/api/amendments")
+def amendments() -> list[dict]:
+    """Every recorded amendment, grouped by the Act that made it (newest first)."""
+    return get_stories().index()
+
+
+@app.get("/api/provision")
+def provision(
+    section: str = Query(min_length=1, max_length=40),
+    instrument: Literal["gst_act_2020", "gst_rules_2026", "gst_amendment_2021"] = "gst_act_2020",
+) -> dict:
+    """The amendment history of one provision: its current text, versions and amending clauses."""
+    return get_stories().story(instrument, section, _today())
 
 
 @app.post("/api/search")
