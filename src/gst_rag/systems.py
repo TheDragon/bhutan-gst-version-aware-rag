@@ -109,11 +109,18 @@ class RetrievalEngine:
         target_date: str | None = None,
         top_k: int = 5,
         candidate_k: int = 75,
+        expansion: str = "",
     ) -> list[dict]:
+        """Search the corpus.
+
+        ``expansion`` (for example, Gemini-generated statutory terms) is added
+        to the keyword and embedding query only; dates, sections and amendment
+        intent are still read from ``query``.
+        """
         asks_commencement = commencement_intent(query)
         target_date = target_date or (None if asks_commencement else parse_query_date(query))
         allowed = self._allowed_ids(system, target_date, query)
-        retrieval_query = expand_retrieval_query(query)
+        retrieval_query = " ".join(part for part in (expand_retrieval_query(query), expansion.strip()) if part)
 
         lexical_scores = np.asarray(self.bm25.get_scores(bm25_tokenize(retrieval_query)))
         lexical_order = np.argsort(-lexical_scores)

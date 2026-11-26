@@ -132,6 +132,32 @@ def test_grounded_vehicle_rate_calculation():
     assert "Nu. 1,050,000" in result["answer"]
 
 
+def test_tobacco_rate_answer_quotes_the_schedule_and_requires_rate_evidence():
+    question = "What is the GST on tobacco latest?"
+    quote = "Other than the zero rate prescribed in Schedule V, the applicable GST rate on taxable supplies and taxable imports of goods and services shall be 5%."
+    schedule = {
+        "chunk_id": "schedule-rate",
+        "document_id": "gst_consolidated_2025",
+        "title": "Consolidated GST Act",
+        "source_url": "https://example.test/gst.pdf",
+        "section_number": "1",
+        "page_number": 146,
+        "text": f"1. {quote} [Amended by section 67]",
+    }
+    assert gst_rate_intent(question)
+    assert "Schedule I" in expand_retrieval_query(question)
+    result = EvidenceGenerator().answer(question, [schedule], "2026-01-01")
+    assert result["answer"].startswith("If you import tobacco products into Bhutan, the standard GST rate is 5%.")
+    assert "Nu. 5 for every Nu. 100 that GST is charged on" in result["answer"]
+    assert result["evidence_quote"] == quote
+    assert result["citations"][0]["chunk_id"] == "schedule-rate"
+
+    unrelated = {**schedule, "text": "GST applies when a voucher is redeemed."}
+    result = EvidenceGenerator().answer(question, [unrelated], "2026-01-01")
+    assert result["abstained"]
+    assert result["reason"] == "no_supported_gst_rate"
+
+
 def test_named_act_commencement_answer_uses_the_cited_clause():
     question = "What commencement date applies to section 40 under the GST Amendment Act 2025?"
     evidence = {

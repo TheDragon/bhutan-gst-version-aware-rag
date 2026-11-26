@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowRight,
+  ArrowUp,
+  Lightbulb,
   BarChart3,
   BookOpen,
   CalendarDays,
@@ -19,7 +21,6 @@ import {
   Menu,
   Search,
   ShieldCheck,
-  Sparkles,
   X,
 } from 'lucide-react'
 import { api } from './api'
@@ -33,18 +34,12 @@ const NAV = [
 ]
 
 const SYSTEMS = {
-  standard: { label: 'Standard RAG', short: 'Standard', tone: 'slate' },
-  date_filtered: { label: 'Date-filtered RAG', short: 'Date-filtered', tone: 'blue' },
-  version_aware: { label: 'Version-aware RAG', short: 'Version-aware', tone: 'gold' },
+  standard: { label: 'Standard RAG', short: 'Standard', tone: 'slate', description: 'Searches for relevant wording across all dates.' },
+  date_filtered: { label: 'Date-filtered RAG', short: 'Date-filtered', tone: 'blue', description: 'Searches only passages active on your chosen date.' },
+  version_aware: { label: 'Version-aware RAG', short: 'Version-aware', tone: 'gold', description: 'Uses your date and amendment links to rank passages.' },
 }
 
-const EXAMPLES = [
-  'As of 1 January 2026, how was Section 40 amended?',
-  'What does Section 11 say about taxable activity?',
-  'Which GST provisions came into force in 2026?',
-]
-
-const today = new Date().toISOString().slice(0, 10)
+const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Thimphu', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 
 function cx(...values) {
   return values.filter(Boolean).join(' ')
@@ -57,12 +52,8 @@ function App() {
   const [health, setHealth] = useState(null)
 
   useEffect(() => {
-    Promise.all([api.stats(), api.health()])
-      .then(([statsData, healthData]) => {
-        setStats(statsData)
-        setHealth(healthData)
-      })
-      .catch(() => {})
+    api.stats().then(setStats).catch(() => {})
+    api.health().then(setHealth).catch(() => {})
   }, [])
 
   const navigate = (next) => {
@@ -76,7 +67,7 @@ function App() {
       <Header page={page} navigate={navigate} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
       <main>
         {page === 'overview' && <Overview stats={stats} health={health} navigate={navigate} />}
-        {page === 'research' && <ResearchWorkspace />}
+        {page === 'research' && <ResearchWorkspace llm={health?.llm_model} />}
         {page === 'compare' && <CompareWorkspace />}
         {page === 'timeline' && <TimelineExplorer />}
         {page === 'library' && <CorpusLibrary />}
@@ -111,11 +102,20 @@ function Header({ page, navigate, menuOpen, setMenuOpen }) {
 }
 
 function Overview({ stats, health, navigate }) {
+  const benchmark = stats?.systems?.version_aware
+  const accuracy = benchmark?.version_selection_accuracy
+  const questionCount = benchmark?.version_sensitive_questions
+  const hasAccuracy = Number.isFinite(accuracy) && questionCount > 0
   const statCards = [
-    { value: stats?.documents ?? '10', label: 'Official documents', icon: FileCheck2 },
-    { value: stats?.chunks?.toLocaleString() ?? '1,581', label: 'Searchable passages', icon: Layers3 },
-    { value: stats?.version_events ?? '62', label: 'Version relationships', icon: History },
-    { value: '69.6%', label: 'Version accuracy', icon: Gauge },
+    { value: stats?.documents ?? '—', label: 'Official documents', icon: FileCheck2 },
+    { value: stats?.chunks?.toLocaleString() ?? '—', label: 'Searchable passages', icon: Layers3 },
+    { value: stats?.version_events ?? '—', label: 'Version relationships', icon: History },
+    {
+      value: hasAccuracy ? `${(accuracy * 100).toFixed(1)}%` : '—',
+      label: 'Version-selection accuracy',
+      detail: hasAccuracy ? `${Math.round(accuracy * questionCount)} of ${questionCount} version-sensitive test questions` : 'Benchmark result unavailable',
+      icon: Gauge,
+    },
   ]
 
   return (
@@ -139,7 +139,9 @@ function Overview({ stats, health, navigate }) {
           <div className="model-line">
             <span><Check size={14} /> Fine-tuned MiniLM</span>
             <span><Check size={14} /> BM25 + FAISS</span>
-            <span><Check size={14} /> {health?.generator_model?.replace('google/', '') || 'FLAN-T5-base'}</span>
+            {health?.llm_model
+              ? <span><Check size={14} /> {generatorLabel(health.llm_model)} answers</span>
+              : health?.generator_model && <span><Check size={14} /> {generatorLabel(health.generator_model)}</span>}
           </div>
         </div>
         <div className="hero-visual" aria-hidden="true">
@@ -153,7 +155,7 @@ function Overview({ stats, health, navigate }) {
           </div>
           <div className="research-card card-source">
             <span className="source-index">01</span>
-            <div><strong>Amendment Act 2025</strong><small>Section 12 · page 4</small></div>
+            <div><strong>Amendment Act 2025</strong><small>Clause 12 · PDF page 24</small></div>
             <FileCheck2 size={20} />
           </div>
           <div className="research-card card-version">
@@ -164,11 +166,11 @@ function Overview({ stats, health, navigate }) {
       </section>
 
       <section className="stats-band section-wrap" aria-label="Project statistics">
-        {statCards.map(({ value, label, icon: Icon }) => (
+        {statCards.map(({ value, label, detail, icon: Icon }) => (
           <article className="stat-card" key={label}>
             <Icon size={19} />
             <strong>{value}</strong>
-            <span>{label}</span>
+            <span>{label}{detail && <small>{detail}</small>}</span>
           </article>
         ))}
       </section>
@@ -217,88 +219,212 @@ function FeatureCard({ icon: Icon, accent, number, title, text, onClick }) {
   )
 }
 
-function ResearchWorkspace() {
-  const [question, setQuestion] = useState(EXAMPLES[0])
-  const [targetDate, setTargetDate] = useState('2026-01-01')
-  const [system, setSystem] = useState('version_aware')
-  const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+function ResearchWorkspace({ llm }) {
+  const [turns, setTurns] = useState([])
+  const [draft, setDraft] = useState('')
+  const endRef = useRef(null)
+  const busy = turns.some((turn) => turn.loading)
 
-  const run = async (event) => {
-    event?.preventDefault()
-    setLoading(true)
-    setError('')
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [turns.length])
+
+  // The chat always asks about the law in force today with version-aware
+  // retrieval. Questions about the past ("what was it before?", "in 2025")
+  // are read from the wording; the Compare tab keeps the date and mode controls.
+  const ask = async (question) => {
+    const text = question.trim()
+    if (text.length < 3 || busy) return
+    const id = Date.now()
+    setDraft('')
+    setTurns((current) => [...current, { id, question: text, loading: true }])
     try {
-      setResult(await api.answer({ question, target_date: targetDate || null, system, top_k: 5 }))
+      const result = await api.answer({ question: text, system: 'version_aware', top_k: 5 })
+      setTurns((current) => current.map((turn) => (turn.id === id ? { ...turn, loading: false, result } : turn)))
     } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
+      setTurns((current) => current.map((turn) => (turn.id === id ? { ...turn, loading: false, error: err.message } : turn)))
     }
   }
 
   return (
-    <PageFrame eyebrow="Ask & inspect" title="Research a GST question" description="Choose the legal date, inspect the answer, then audit every retrieved passage and score.">
-      <div className="workspace-grid">
-        <aside className="query-panel">
-          <form onSubmit={run}>
-            <label htmlFor="question">Your question</label>
-            <textarea id="question" value={question} onChange={(e) => setQuestion(e.target.value)} rows="6" />
-            <div className="field-row">
-              <div className="field-group">
-                <label htmlFor="target-date">Target date</label>
-                <div className="input-with-icon"><CalendarDays size={17} /><input id="target-date" type="date" max={today} value={targetDate} onChange={(e) => setTargetDate(e.target.value)} /></div>
-              </div>
-              <div className="field-group">
-                <label htmlFor="system">Retrieval mode</label>
-                <div className="select-wrap"><select id="system" value={system} onChange={(e) => setSystem(e.target.value)}>{Object.entries(SYSTEMS).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select><ChevronDown size={16} /></div>
-              </div>
-            </div>
-            <button className="primary-button full" disabled={loading || question.trim().length < 3}>
-              {loading ? <><span className="spinner" /> Loading models & researching…</> : <><Sparkles size={17} /> Research question</>}
-            </button>
-          </form>
-          <div className="example-block">
-            <span>Try an example</span>
-            {EXAMPLES.map((example) => <button key={example} onClick={() => setQuestion(example)}>{example}<ChevronRight size={14} /></button>)}
-          </div>
-          <div className="help-note"><CircleAlert size={16} /><p>The first generated answer may take longer while FLAN-T5-base loads into memory.</p></div>
-        </aside>
-
-        <section className="result-panel">
-          {!result && !loading && !error && <EmptyState icon={FileSearch} title="Your evidence will appear here" text="Ask a question to see the generated answer, applicable date, citations, and retrieval evidence." />}
-          {loading && <LoadingState />}
-          {error && <ErrorState message={error} />}
-          {result && !loading && (
-            <>
-              <div className="answer-card">
-                <div className="answer-meta">
-                  <span className="status-dot"><span /> Evidence-bound answer</span>
-                  <SystemBadge system={result.system} />
-                </div>
-                <h2>{result.abstained ? 'Insufficient evidence' : 'Answer'}</h2>
-                <p className="answer-text">{result.answer}</p>
-                <div className="answer-footer">
-                  <span><CalendarDays size={15} /> Applicable on {formatDate(result.target_date)}</span>
-                  <span><Sparkles size={15} /> {result.generator?.replace('google/', '')}</span>
-                  {result.answer_strategy && (
-                    <span><ShieldCheck size={15} /> {result.answer_strategy.replaceAll('_', ' ')}</span>
-                  )}
-                </div>
-              </div>
-              <div className="notice-banner"><ShieldCheck size={18} /><span><strong>Verify before relying.</strong> {result.notice}</span></div>
-              <EvidenceList evidence={result.evidence} />
-            </>
-          )}
-        </section>
+    <div className="page-wrap section-wrap chat-page">
+      <div className="chat-heading">
+        <span className="eyebrow">Ask GST Lens</span>
+        <h1>Ask about Bhutan’s GST law</h1>
+        <p>Answers use the law in force today, quote the official text, and show when a rule was amended. Ask “what was it before?” to see an earlier version.</p>
       </div>
-    </PageFrame>
+
+      <div className="chat-thread">
+        {turns.length === 0 && (
+          <div className="chat-empty">
+            <strong>Try asking</strong>
+            <div className="starter-grid">
+              {STARTERS.map((question) => (
+                <button key={question} onClick={() => ask(question)} disabled={busy}>
+                  <span>{question}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {turns.map((turn) => (
+          <section className="chat-turn" key={turn.id}>
+            <div className="user-bubble"><p>{turn.question}</p></div>
+            {turn.loading && <LoadingState compact />}
+            {turn.error && <ErrorState message={turn.error} />}
+            {turn.result && <AnswerTurn result={turn.result} onAsk={ask} busy={busy} />}
+          </section>
+        ))}
+        <div ref={endRef} />
+      </div>
+
+      <form className="composer" onSubmit={(event) => { event.preventDefault(); ask(draft) }}>
+        <textarea
+          rows={2}
+          value={draft}
+          placeholder="Ask about a GST rule, rate, product or section…"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              ask(draft)
+            }
+          }}
+        />
+        <button className="send-button" disabled={busy || draft.trim().length < 3} aria-label="Send question">
+          {busy ? <span className="spinner" /> : <ArrowUp size={18} />}
+        </button>
+      </form>
+      <p className="composer-note">
+        Research prototype, not legal advice.{' '}
+        {llm ? `Answers are written by ${generatorLabel(llm)} from the official texts only.` : 'Offline mode: answers quote the law directly.'}{' '}
+        To compare retrieval methods or pick a date, use Compare systems.
+      </p>
+    </div>
   )
 }
 
+const STARTERS = [
+  'What is the GST rate?',
+  'What was the GST rate before the latest change?',
+  'Who reviews a GST decision if I disagree with the Department?',
+  'Do I pay GST on cooking oil?',
+]
+
+function AnswerTurn({ result, onAsk, busy }) {
+  if (result.clarification_title) {
+    return (
+      <article className="answer-card">
+        <p className="answer-text">{result.answer}</p>
+        {result.clarification_question && (
+          <button className="secondary-button clarification-button" disabled={busy} onClick={() => onAsk(result.clarification_question)}>
+            {result.clarification_action} <ArrowRight size={15} />
+          </button>
+        )}
+      </article>
+    )
+  }
+
+  const citation = result.citations?.[0]
+  const selected = result.version_context?.selected
+  const compare = result.version_context?.compare
+  const quoted = isQuotedPassage(result)
+  // Without an answer model the "answer" is itself a passage of the law; show
+  // it as the quote rather than pretending it is a written answer.
+  const quote = quoted ? result.answer : result.evidence_quote
+
+  return (
+    <article className="answer-card">
+      {result.time_note && <p className="time-note"><History size={14} /> {result.time_note}</p>}
+      <p className={cx('answer-text', quoted && 'muted')}>
+        {quoted && !result.abstained ? 'This is the most relevant wording I found in the law:' : result.answer}
+      </p>
+
+      {!result.abstained && quote && (
+        <figure className="answer-source-quote">
+          <figcaption>From the law</figcaption>
+          <blockquote>“{quote}”</blockquote>
+          {citation && <SourceLine citation={citation} selected={selected} />}
+        </figure>
+      )}
+      {!result.abstained && !quote && citation && <div className="source-only"><SourceLine citation={citation} selected={selected} /></div>}
+
+      {!result.abstained && compare && <AmendmentBlock compare={compare} summary={result.change_summary} />}
+
+      {result.suggestion && (
+        <div className="suggestion">
+          <Lightbulb size={15} />
+          <span>{result.abstained ? 'Try asking:' : 'This answer may be incomplete. For a fuller answer, try:'}</span>
+          <button disabled={busy} onClick={() => onAsk(result.suggestion)}>{result.suggestion} <ArrowRight size={13} /></button>
+        </div>
+      )}
+    </article>
+  )
+}
+
+function SourceLine({ citation, selected }) {
+  const name = selected?.short_name || citation.title
+  return (
+    <p className="source-line">
+      {name} · {sectionLabel(selected || citation)} · page {citation.page_number}
+      {citation.source_url && <> · <a href={citation.source_url} target="_blank" rel="noreferrer">Open official PDF <ExternalLink size={12} /></a></>}
+    </p>
+  )
+}
+
+function AmendmentBlock({ compare, summary }) {
+  const earlier = compare.direction === 'earlier'
+  const { before, after } = compare
+  const used = <em className="used-tag">used for this answer</em>
+  return (
+    <div className="amendment">
+      <p className="amendment-head"><History size={15} /> {earlier ? 'This rule was amended' : 'This rule was amended later'}</p>
+      <ol className="amendment-timeline">
+        <li className={cx(before.selected && 'used')}>
+          <b>{before.short_name}</b>
+          <small>{formatDate(before.start)} – {formatDate(before.end) || 'later'}</small>
+          {before.selected && used}
+        </li>
+        <li className="arrow" aria-hidden="true"><ArrowRight size={16} /></li>
+        <li className={cx(after.selected && 'used')}>
+          <b>{after.short_name}</b>
+          <small>in force from {formatDate(after.start)}</small>
+          {after.selected && used}
+        </li>
+      </ol>
+      {summary && <p className="amendment-summary">{summary}</p>}
+      {compare.diff?.length > 0 ? (
+        <p className="diff-text">
+          {compare.diff.map((op, index) => {
+            if (op.op === 'del') return <del key={index}>{op.text}</del>
+            if (op.op === 'add') return <ins key={index}>{op.text}</ins>
+            return <span key={index}>{op.text}</span>
+          }).reduce((parts, part, index) => (index ? [...parts, ' ', part] : [part]), [])}
+        </p>
+      ) : (
+        <div className="side-by-side">
+          <div><span>Before</span><p>{before.text}</p></div>
+          <div><span>After</span><p>{after.text}</p></div>
+        </div>
+      )}
+      {compare.amended_by && <p className="amended-by">Changed by {compare.amended_by}</p>}
+    </div>
+  )
+}
+
+function sectionLabel(item) {
+  const section = String(item.section_number || '')
+  if (!section || section.startsWith('page-part')) return 'Schedule / notice text'
+  const amendment = item.document_type === 'amendment' || /amendment_/.test(item.document_id || '')
+  if (amendment) {
+    const target = item.affected_sections?.[0]
+    return target ? `Clause ${section} (amends Section ${target})` : `Clause ${section}`
+  }
+  return `${item.document_id?.includes('rules') ? 'Rule' : 'Section'} ${section}`
+}
+
 function CompareWorkspace() {
-  const [question, setQuestion] = useState(EXAMPLES[0])
+  const [question, setQuestion] = useState('How was GST Act Section 40 amended as of 1 January 2026?')
   const [targetDate, setTargetDate] = useState('2026-01-01')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -308,6 +434,7 @@ function CompareWorkspace() {
     event.preventDefault()
     setLoading(true)
     setError('')
+    setResult(null)
     try {
       setResult(await api.compare({ question, target_date: targetDate || null, top_k: 3, generate_answers: false }))
     } catch (err) {
@@ -318,27 +445,49 @@ function CompareWorkspace() {
   }
 
   return (
-    <PageFrame eyebrow="Controlled comparison" title="See what version awareness changes" description="Compare the top evidence returned by all three systems using the same question and date.">
+    <PageFrame eyebrow="Compare systems" title="What does each search method find?" description="Ask one question and pick a date. You’ll see which passages each method puts first.">
       <form className="compare-form" onSubmit={run}>
-        <div><label htmlFor="compare-question">Question</label><input id="compare-question" value={question} onChange={(e) => setQuestion(e.target.value)} /></div>
+        <div><label htmlFor="compare-question">Your GST question</label><input id="compare-question" value={question} onChange={(e) => setQuestion(e.target.value)} /></div>
         <div><label htmlFor="compare-date">Target date</label><input id="compare-date" type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} /></div>
-        <button className="primary-button" disabled={loading}>{loading ? <span className="spinner" /> : <BarChart3 size={17} />} Compare</button>
+        <button className="primary-button" disabled={loading || question.trim().length < 3}>{loading ? <span className="spinner" /> : <BarChart3 size={17} />} Compare</button>
       </form>
       {error && <ErrorState message={error} />}
-      {!result && !loading && <div className="comparison-intro"><BarChart3 size={26} /><div><strong>Why compare?</strong><p>Standard retrieval can return a relevant but outdated passage. Date filtering removes inactive documents. Version-aware retrieval also follows amendment relationships and prioritises the applicable legal version.</p></div></div>}
       {loading && <LoadingState compact />}
-      {result && !loading && (
-        <div className="comparison-grid">
-          {result.comparisons.map((column) => (
-            <article className={cx('comparison-column', column.system)} key={column.system}>
-              <div className="comparison-head"><SystemBadge system={column.system} /><small>{column.evidence.length} passages</small></div>
-              {column.evidence.map((item, index) => <CompactEvidence item={item} index={index} key={item.chunk_id} />)}
-            </article>
-          ))}
-        </div>
+      {result && (
+        <section className="comparison-guide" aria-live="polite">
+          <h2>{comparisonSummary(result.comparisons)}</h2>
+          <p>Start with <strong>Rank 1</strong>, each method’s first pick. Open any result to read the full passage, see which sections it changes, and check the official source.</p>
+        </section>
       )}
+      <div className="comparison-grid">
+        {Object.entries(SYSTEMS).map(([system, method]) => {
+          const evidence = result?.comparisons.find((column) => column.system === system)?.evidence
+          return (
+            <article className={cx('comparison-column', system)} key={system}>
+              <header className="comparison-head">
+                <h2>{method.short}</h2>
+                <p>{method.description}</p>
+              </header>
+              {evidence?.length === 0 && <p className="comparison-empty">No passages returned for this search.</p>}
+              {evidence?.map((item, index) => <CompactEvidence item={item} index={index} key={item.chunk_id} />)}
+            </article>
+          )
+        })}
+      </div>
     </PageFrame>
   )
+}
+
+function comparisonSummary(comparisons) {
+  const first = comparisons.map(({ evidence }) => evidence[0]?.chunk_id)
+  if (first.some((id) => !id)) return 'Some methods returned no passages'
+  if (new Set(first).size === 1) return 'All three methods put the same passage first'
+
+  const firstBySystem = Object.fromEntries(comparisons.map(({ system }, index) => [system, first[index]]))
+  if (firstBySystem.standard === firstBySystem.date_filtered) {
+    return 'Standard and Date-filtered agree. Version-aware puts a different passage first.'
+  }
+  return 'The methods differ on which passage comes first'
 }
 
 function TimelineExplorer() {
@@ -433,41 +582,31 @@ function PageFrame({ eyebrow, title, description, children }) {
   )
 }
 
-function EvidenceList({ evidence }) {
-  const [open, setOpen] = useState(0)
-  return (
-    <div className="evidence-section">
-      <div className="subsection-title"><div><span className="eyebrow">Evidence inspector</span><h3>Retrieved passages</h3></div><span>{evidence?.length || 0} results</span></div>
-      <div className="evidence-list">
-        {evidence?.map((item, index) => (
-          <article className={cx('evidence-card', open === index && 'expanded')} key={item.chunk_id}>
-            <button className="evidence-summary" onClick={() => setOpen(open === index ? -1 : index)}>
-              <span className="evidence-rank">{String(index + 1).padStart(2, '0')}</span>
-              <span className="evidence-title"><strong>{item.title}</strong><small>Section {item.section_number} · Page {item.page_number}</small></span>
-              <span className="score-chip">RRF {item.scores.rrf?.toFixed(3) || '—'}</span>
-              <ChevronDown size={18} />
-            </button>
-            {open === index && (
-              <div className="evidence-body">
-                <p>{item.text}</p>
-                <div className="score-row"><Score label="Semantic" value={item.scores.semantic} /><Score label="BM25" value={item.scores.bm25} /><Score label="Fused RRF" value={item.scores.rrf} /></div>
-                <div className="metadata-row"><span><CalendarDays size={14} /> {formatRange(item.version_start || item.effective_from, item.version_end || item.effective_to)}</span><span><Layers3 size={14} /> {item.version_status?.replaceAll('_', ' ')}</span></div>
-                <a href={item.source_url} target="_blank" rel="noreferrer">Open official PDF <ExternalLink size={14} /></a>
-              </div>
-            )}
-          </article>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 function CompactEvidence({ item, index }) {
+  const locatorLabel = { amendment: 'Clause', rules: 'Rule' }[item.document_type] ?? 'Section'
+  const locator = item.section_number && !item.section_number.startsWith('page-part-')
+    ? `${locatorLabel} ${item.section_number}`
+    : ''
+  const reference = [locator, item.page_number && `PDF page ${item.page_number}`].filter(Boolean).join(' · ')
+  const excerpt = item.text.length > 175 ? `${item.text.slice(0, 175).replace(/\s+\S*$/, '')}…` : item.text
+
   return (
-    <div className="compact-evidence">
-      <span>{index + 1}</span>
-      <div><strong>{item.title}</strong><small>§ {item.section_number} · p. {item.page_number}</small><p>{item.text.slice(0, 145)}{item.text.length > 145 ? '…' : ''}</p></div>
-    </div>
+    <details className="compact-evidence">
+      <summary>
+        <span className={cx('comparison-rank', index === 0 && 'first')}>Rank {index + 1}</span>
+        <strong>{item.title}</strong>
+        {reference && <small>{reference}</small>}
+        <span className="comparison-excerpt">{excerpt}</span>
+        <span className="comparison-disclosure">
+          <span className="expand-label">Read passage</span><span className="collapse-label">Hide passage</span><ChevronDown size={15} />
+        </span>
+      </summary>
+      <div className="comparison-passage">
+        <p>{item.text}</p>
+        {item.affected_sections?.length > 0 && <p><strong>Affected sections</strong> {item.affected_sections.join(', ')}</p>}
+        {item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">Open official source <ExternalLink size={14} /></a>}
+      </div>
+    </details>
   )
 }
 
@@ -500,16 +639,6 @@ function DocumentCard({ document }) {
   )
 }
 
-function SystemBadge({ system }) {
-  const data = SYSTEMS[system] || SYSTEMS.version_aware
-  return <span className={cx('system-badge', data.tone)}>{data.short}</span>
-}
-
-function Score({ label, value }) {
-  const percent = Math.max(0, Math.min(100, (Number(value) || 0) * (label === 'BM25' ? 5 : 100)))
-  return <div className="score"><span>{label}<strong>{value == null ? '—' : Number(value).toFixed(3)}</strong></span><i><b style={{ width: `${percent}%` }} /></i></div>
-}
-
 function LoadingState({ compact = false }) {
   return <div className={cx('loading-state', compact && 'compact')}><span className="loader-orbit"><i /><b /></span><div><strong>Working through the evidence</strong><p>Retrieving passages and checking version metadata…</p></div></div>
 }
@@ -519,7 +648,7 @@ function EmptyState({ icon: Icon, title, text }) {
 }
 
 function ErrorState({ message }) {
-  return <div className="error-state"><CircleAlert size={20} /><div><strong>Could not complete the request</strong><p>{message}. Make sure the FastAPI server is running on port 8000.</p></div></div>
+  return <div className="error-state"><CircleAlert size={20} /><div><strong>Could not complete the request</strong><p>{message}</p></div></div>
 }
 
 function Footer({ health }) {
@@ -537,6 +666,14 @@ function formatDate(value) {
   const parsed = new Date(`${value}T00:00:00`)
   if (Number.isNaN(parsed.getTime())) return value
   return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(parsed)
+}
+
+function isQuotedPassage(result) {
+  return ['extractive', 'validated_extractive_fallback'].includes(result?.answer_strategy)
+}
+
+function generatorLabel(model) {
+  return model === 'extractive-evidence-v1' ? 'Extractive answers' : model.replace(/^google\//, '')
 }
 
 function formatRange(start, end) {

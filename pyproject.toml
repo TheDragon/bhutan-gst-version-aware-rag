@@ -35,3 +35,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# The Dash testing plugin (from a globally installed dash) stops torch's DLLs
+# loading on Windows; this project doesn't use it.
+addopts = "-p no:dash"

@@ -7,6 +7,42 @@ def bm25_tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+def normalize_user_question(question: str) -> str:
+    """Normalize known spelling variants without rewriting legal references."""
+    question = " ".join(question.split())
+    question = re.sub(
+        r"\b(?:cigarrete|ciggarrette|cigaret)(s?)\b",
+        lambda match: "cigarette" + match.group(1).lower(),
+        question,
+        flags=re.I,
+    )
+    words = " ".join(bm25_tokenize(question))
+    if words in {"gst return deadline", "gst filing deadline", "gst return due date"}:
+        return "When must a taxable person file a GST return after the end of each tax period?"
+    return question
+
+
+def gst_tax_needs_clarification(question: str) -> bool:
+    if not (tobacco_context(question) or vehicle_context(question)):
+        return False
+    gst = re.search(r"\b(gst|goods and services tax)\b", question, re.I)
+    return bool(
+        re.search(r"\b(excise|duty|duties|total tax(?:es)?|all taxes)\b", question, re.I)
+        or (not gst and re.search(r"\btax(?:es)?\b", question, re.I))
+    )
+
+
+def gst_definition_intent(question: str) -> bool:
+    words = " ".join(bm25_tokenize(question))
+    term = r"(?:gst|goods and services tax)"
+    return bool(re.fullmatch(
+        rf"(?:{term}|what (?:is|s) (?:the )?{term}|what does {term} (?:mean|stand for)|"
+        rf"define (?:the )?{term}|what is the (?:meaning|definition) of {term})"
+        r"(?: in bhutan)?(?: please)?",
+        words,
+    ))
+
+
 def commencement_intent(query: str) -> bool:
     if re.search(r"\b(commencement|effective date)\b", query, re.I):
         return True
@@ -35,8 +71,39 @@ def gst_rate_intent(query: str) -> bool:
     lowered = query.lower()
     has_gst = "gst" in lowered or "goods and services tax" in lowered
     asks_rate = bool(re.search(r"\b(rate|percent|percentage|how much|payable|appl(?:y|ies|ied)|charg(?:e|ed))\b", lowered))
-    vehicle_context = bool(re.search(r"\b(car|cars|vehicle|vehicles|automobile|motorcar)\b", lowered))
-    return has_gst and (asks_rate or vehicle_context)
+    tobacco_rate = tobacco_context(lowered) and re.search(
+        r"\b(?:gst|goods and services tax)\s+(?:on|for|tobacco|cigarettes?|cigars?)\b|"
+        r"\b(?:tobacco(?: products)?|cigarettes?|cigars?)\s+gst\b",
+        lowered,
+    )
+    return has_gst and bool(asks_rate or vehicle_context(lowered) or tobacco_rate)
+
+
+def tobacco_context(query: str) -> bool:
+    return bool(re.search(r"\b(tobacco|cigarettes?|cigars?)\b", query, re.I))
+
+
+def vehicle_context(query: str) -> bool:
+    return bool(re.search(r"\b(cars?|vehicles?|automobile|motorcar)\b", query, re.I))
+
+
+def gst_question_has_evidence(question: str, evidence: list[dict]) -> bool:
+    """Require a topical match for vague queries and unfamiliar GST rate subjects."""
+    rate_subject = re.search(r"\bgst rate\s+(?:on|for)\s+([^?.]+)", question, re.I)
+    if rate_subject and not (tobacco_context(question) or vehicle_context(question)):
+        phrase = re.split(r"\b(?:as of|in bhutan|today|currently)\b", rate_subject.group(1), maxsplit=1, flags=re.I)[0]
+    elif re.search(r"\b(gst|goods and services tax|section|schedule|amendment)\b", question, re.I):
+        return True
+    else:
+        phrase = question
+
+    common = {
+        "a", "an", "and", "are", "as", "bhutan", "can", "current", "do", "does", "for", "how", "i", "in",
+        "is", "latest", "me", "my", "now", "of", "on", "please", "rate", "tax", "taxes", "tell", "the", "to",
+        "today", "tomorrow", "was", "what", "when", "where", "which", "will",
+    }
+    focus = {term for term in bm25_tokenize(phrase) if term not in common and not term.isdigit()}
+    return bool(focus) and any(focus <= set(bm25_tokenize(item.get("text", ""))) for item in evidence)
 
 
 def expand_retrieval_query(query: str) -> str:
@@ -44,7 +111,7 @@ def expand_retrieval_query(query: str) -> str:
     expansions: list[str] = []
     if gst_rate_intent(query):
         expansions.append("Schedule I applicable GST rate taxable supplies taxable imports value of supply import")
-    if re.search(r"\b(car|cars|vehicle|vehicles|automobile|motorcar)\b", query, re.I):
+    if vehicle_context(query):
         expansions.append("passenger vehicle motor car purchase import")
     return " ".join([query, *expansions]).strip()
 
